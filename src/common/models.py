@@ -22,6 +22,8 @@ class AlertCategory(Enum):
     INTRUDER = "intruder_detected"
     HIGH_NOISE = "high_noise"
     LOW_LIGHT = "low_light"
+    HIGH_HUMIDITY = "high_humidity"
+    POOR_AIR_QUALITY = "poor_air_quality"
 
 
 def _utc_now_iso() -> str:
