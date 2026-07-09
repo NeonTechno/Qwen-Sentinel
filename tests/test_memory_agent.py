@@ -1,8 +1,7 @@
-"""Unit tests for MemoryAgent (4 tests)."""
+"""Unit tests for MemoryAgent."""
 import tempfile
 import unittest
 from pathlib import Path
-
 from src.cloud.memory import MemoryAgent
 from src.common.models import Alert, AlertCategory, Severity
 
@@ -28,12 +27,8 @@ class TestMemoryAgent(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "memory.json"
             memory = MemoryAgent(storage_path=str(path))
-            memory.record(
-                {"timestamp": "t1", "environment_state": "overheating"},
-                [make_alert()],
-            )
+            memory.record({"timestamp": "t1", "environment_state": "overheating"}, [make_alert()])
             self.assertTrue(path.exists())
-
             reloaded = MemoryAgent(storage_path=str(path))
             self.assertEqual(len(reloaded.get_recent(10)), 1)
             self.assertEqual(reloaded.get_recent(1)[0]["environment_state"], "overheating")

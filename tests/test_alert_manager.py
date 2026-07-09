@@ -1,7 +1,6 @@
-"""Unit tests for AlertManager (3 tests)."""
+"""Unit tests for AlertManager."""
 import unittest
-
-from src.cloud.alerts import AlertManager
+from src.cloud.alerts import AlertManager, create_webhook_dispatcher
 from src.common.models import Alert, AlertCategory, Severity
 
 
@@ -20,18 +19,13 @@ class TestAlertManager(unittest.TestCase):
 
     def test_cooldown_suppresses_duplicate(self):
         clock_time = {"now": 0.0}
-        manager = AlertManager(
-            cooldown_seconds=10,
-            dispatcher=lambda a: None,
-            clock=lambda: clock_time["now"],
-        )
+        manager = AlertManager(cooldown_seconds=10, dispatcher=lambda a: None, clock=lambda: clock_time["now"])
         alert = make_alert()
         first = manager.process([alert])
-        second = manager.process([alert])  # same clock time -> still in cooldown
+        second = manager.process([alert])
         self.assertEqual(len(first), 1)
         self.assertEqual(len(second), 0)
-
-        clock_time["now"] = 11.0  # advance past cooldown
+        clock_time["now"] = 11.0
         third = manager.process([alert])
         self.assertEqual(len(third), 1)
 
@@ -40,6 +34,11 @@ class TestAlertManager(unittest.TestCase):
         formatted = AlertManager.format_alert(alert)
         self.assertIn("INFO", formatted)
         self.assertIn("low_light", formatted)
+
+    def test_webhook_dispatcher_creation(self):
+        dispatcher = create_webhook_dispatcher("http://example.com/webhook")
+        self.assertIsNotNone(dispatcher)
+        self.assertCallable(dispatcher)
 
 
 if __name__ == "__main__":
