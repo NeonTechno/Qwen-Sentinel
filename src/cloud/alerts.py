@@ -1,10 +1,11 @@
 """
-AlertManager: dedupes and dispatches Alert objects raised by EdgeDetector,
-applying a per-category cooldown so a persistent anomaly doesn't spam the
-same channel every cycle.
+AlertManager with webhook support for Qwen-Sentinel.
 """
+import json
 import time
 from typing import Callable, Dict, List, Optional
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
 
 from src.common import config
 from src.common.models import Alert
@@ -12,13 +13,28 @@ from src.common.models import Alert
 DispatchFn = Callable[[Alert], None]
 
 
+def create_webhook_dispatcher(url: str, secret: Optional[str] = None) -> DispatchFn:
+    def webhook_dispatch(alert: Alert) -> None:
+        payload = json.dumps(alert.to_dict()).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if secret:
+            headers["X-Webhook-Secret"] = secret
+        req = Request(url, data=payload, headers=headers, method="POST")
+        try:
+            with urlopen(req, timeout=5) as response:
+                if response.status >= 400:
+                    print(f"Webhook error: HTTP {response.status}")
+        except HTTPError as e:
+            print(f"Webhook HTTP error: {e.code} - {e.reason}")
+        except URLError as e:
+            print(f"Webhook URL error: {e.reason}")
+        except Exception as e:
+            print(f"Webhook dispatch failed: {str(e)}")
+    return webhook_dispatch
+
+
 class AlertManager:
-    def __init__(
-        self,
-        cooldown_seconds: float = config.DEFAULT_ALERT_COOLDOWN_SECONDS,
-        dispatcher: Optional[DispatchFn] = None,
-        clock: Callable[[], float] = time.monotonic,
-    ) -> None:
+    def __init__(self, cooldown_seconds: float = config.DEFAULT_ALERT_COOLDOWN_SECONDS, dispatcher: Optional[DispatchFn] = None, clock: Callable[[], float] = time.monotonic) -> None:
         self.cooldown_seconds = cooldown_seconds
         self.dispatcher = dispatcher or self._default_dispatch
         self._clock = clock
