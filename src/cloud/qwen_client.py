@@ -1,8 +1,9 @@
 """
-QwenClient: Client for Qwen Cloud API integration.
+QwenClient: Advanced client for Qwen Cloud API integration.
 
 Provides natural language processing capabilities for Qwen-Sentinel,
-including alert summarization, action suggestions, and anomaly analysis.
+including alert summarization, action suggestions, anomaly analysis,
+and structured outputs for reliable AI interactions.
 """
 import json
 import os
@@ -18,47 +19,58 @@ class QwenClient:
     integrating Qwen LLM capabilities into Qwen-Sentinel.
     """
     
-    def __init__(self, api_key: Optional[str] = None, base_url: str = "https://api.qwen.ai/v1"):
-        """
-        Initialize Qwen client.
+    FEW_SHOT_EXAMPLES = {
+        'anomaly_detection': """
+        You are an environmental monitoring AI expert. Follow these examples:
         
-        Args:
-            api_key: Qwen Cloud API key. If None, will try to get from environment variable Qwen_Cloud_API
-            base_url: Base URL for Qwen API
+        Example 1 - Critical Overheating:
+        Input: Temperature=42°C, Humidity=60%
+        Output:
+        [
+          {
+            "anomaly_type": "overheating",
+            "severity": "critical",
+            "confidence": 0.98,
+            "description": "Temperature 42°C exceeds critical threshold of 38°C",
+            "suggested_action": "Activate emergency cooling systems immediately"
+          }
+        ]
+        
+        Example 2 - Intruder:
+        Input: Motion=0.85, Objects=[person]
+        Output:
+        [
+          {
+            "anomaly_type": "intruder_detected",
+            "severity": "critical",
+            "confidence": 0.95,
+            "description": "Person detected with motion level 0.85",
+            "suggested_action": "Review security camera footage"
+          }
+        ]
+        
+        Example 3 - No Anomalies:
+        Input: Temperature=22°C
+        Output: []
+        
+        Rule: Only report anomalies with confidence >= 0.7
         """
+    }
+    
+    def __init__(self, api_key: Optional[str] = None, base_url: str = "https://api.qwen.ai/v1"):
         if api_key is None:
             api_key = os.getenv("Qwen_Cloud_API")
-        
         self.api_key = api_key
         self.base_url = base_url
         self._validate_api_key()
     
     def _validate_api_key(self) -> None:
-        """Validate that API key is available."""
         if not self.api_key:
-            raise ValueError(
-                "Qwen API key is required. Either pass it to QwenClient or set "
-                "the Qwen_Cloud_API environment variable."
-            )
+            raise ValueError("Qwen API key required. Set Qwen_Cloud_API env var or pass api_key")
     
     def generate_summary(self, sensor_data: Dict[str, Any], alerts: List[Any]) -> str:
-        """
-        Generate a natural language summary of sensor data and alerts.
-        
-        Args:
-            sensor_data: The sensor reading data
-            alerts: List of alert objects
-            
-        Returns:
-            A human-readable summary string
-        """
-        alert_str = "\n".join([
-            f"- [{a.get('severity', 'unknown').upper()}] {a.get('category', 'unknown')}: {a.get('message', '')}"
-            for a in alerts
-        ]) if alerts else "No active alerts"
-        
-        prompt = f"""You are an environmental monitoring AI assistant.
-Analyze this sensor data and alerts, then provide a concise 2-3 sentence summary.
+        alert_str = "No active alerts" if not alerts else "\n".join([f"- [{a.get('severity', 'unknown').upper()}] {a.get('category', 'unknown')}: {a.get('message', '')}" for a in alerts])
+        prompt = f"""You are an environmental monitoring AI. Analyze this data:
 
 Sensor Data:
 {json.dumps(sensor_data, indent=2)}
@@ -66,156 +78,84 @@ Sensor Data:
 Active Alerts:
 {alert_str}
 
-Provide a brief, professional summary of the current environmental state."""
-        
+Provide a 2-3 sentence professional summary."""
         return self._call_qwen(prompt, temperature=0.3, max_tokens=300)
     
+    def detect_anomalies(self, reading: Dict[str, Any]) -> List[Dict[str, Any]]:
+        sensor_desc = self._build_sensor_description(reading.get("sensors", {}))
+        prompt = f"""{self.FEW_SHOT_EXAMPLES['anomaly_detection']}
+
+Now analyze:
+{sensor_desc}
+
+Return ONLY valid JSON array of anomalies or empty array []."""
+        response = self._call_qwen(prompt, temperature=0.1, max_tokens=500)
+        return self._parse_json_array(response)
+    
     def suggest_actions(self, alerts: List[Any]) -> List[Dict[str, Any]]:
-        """
-        Suggest remediation actions for alerts.
-        
-        Args:
-            alerts: List of alert objects
-            
-        Returns:
-            List of action suggestions with priority and description
-        """
         if not alerts:
             return []
-            
-        alert_str = "\n".join([
-            f"- {a.get('message', str(a))}"
-            for a in alerts
-        ])
-        
-        prompt = f"""You are a facility management AI.
-For these environmental alerts, suggest specific remediation actions.
-
-Alerts:
+        alert_str = "\n".join([f"- {a.get('message', str(a))}" for a in alerts])
+        prompt = f"""You are a facility management AI. For these alerts:
 {alert_str}
 
-Format your response as a JSON array of action objects with these fields:
-- action: string (what to do)
-- priority: string (low, medium, high, critical)
-- description: string (detailed explanation)
+Suggest 1-3 specific remediation actions as JSON array:
+[{{"action": "...", "priority": "high/medium/low", "description": "..."}}]
+Return ONLY valid JSON array."""
+        response = self._call_qwen(prompt, temperature=0.2, max_tokens=400)
+        return self._parse_json_array(response)
+    
+    def analyze_anomaly(self, reading: Dict[str, Any], anomaly_type: str) -> str:
+        prompt = f"""Explain why this sensor reading indicates {anomaly_type}:
 
-Return ONLY the JSON array, no other text."""
-        
-        response = self._call_qwen(prompt, temperature=0.2, max_tokens=500)
-        
+{json.dumps(reading, indent=2)}
+
+Provide 3-4 sentence technical explanation."""
+        return self._call_qwen(prompt, temperature=0.3, max_tokens=400)
+    
+    def _build_sensor_description(self, sensors: Dict[str, Any]) -> str:
+        lines = []
+        temp = sensors.get("temperature", {}).get("value", "N/A")
+        lines.append(f"- Temperature: {temp} degree C")
+        humidity = sensors.get("humidity", {}).get("value", "N/A")
+        lines.append(f"- Humidity: {humidity}%")
+        aqi = sensors.get("air_quality", {}).get("value", "N/A")
+        lines.append(f"- Air Quality (AQI): {aqi}")
+        motion = sensors.get("motion", {}).get("value", "N/A")
+        lines.append(f"- Motion: {motion}")
+        return "\n".join(lines)
+    
+    def _call_qwen(self, prompt: str, temperature: float, max_tokens: int) -> str:
+        if not self.api_key:
+            raise ValueError("Qwen API key not set")
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        payload = {"model": "qwen-plus", "messages": [{"role": "user", "content": prompt}], "temperature": temperature, "max_tokens": max_tokens}
+        try:
+            response = requests.post(f"{self.base_url}/chat/completions", headers=headers, json=payload, timeout=30)
+            response.raise_for_status()
+            result = response.json()
+            if "choices" in result and result["choices"]:
+                return result["choices"][0].get("message", {}).get("content", "")
+            return str(result)
+        except Exception as e:
+            print(f"Qwen API error: {e}")
+            return f"[API Error: {str(e)}]"
+    
+    def _parse_json_array(self, response: str) -> List[Dict[str, Any]]:
+        if not response:
+            return []
         try:
             start = response.find('[')
             end = response.rfind(']') + 1
             if start >= 0 and end > start:
                 return json.loads(response[start:end])
-        except (json.JSONDecodeError, ValueError):
+        except:
             pass
-        
-        return [
-            {
-                "action": "Review sensor data",
-                "priority": "medium",
-                "description": "Manually review the sensor readings and alerts"
-            }
-        ]
-    
-    def analyze_anomaly(self, reading: Dict[str, Any], anomaly_type: str) -> str:
-        """
-        Get detailed explanation for a specific anomaly.
-        
-        Args:
-            reading: The sensor reading with the anomaly
-            anomaly_type: Type of anomaly detected
-            
-        Returns:
-            Detailed explanation string
-        """
-        prompt = f"""You are an environmental monitoring expert AI.
-Explain why this sensor reading might indicate {anomaly_type}.
-
-Sensor Data:
-{json.dumps(reading, indent=2)}
-
-Provide a 3-4 sentence technical explanation focusing on:
-- What specific sensor values triggered the anomaly
-- Why these values are concerning
-- Potential causes
-- Immediate implications"""
-        
-        return self._call_qwen(prompt, temperature=0.3, max_tokens=400)
-    
-    def _call_qwen(self, prompt: str, temperature: float = 0.7, max_tokens: int = 500) -> str:
-        """
-        Call Qwen API with a prompt.
-        
-        Args:
-            prompt: The text prompt to send to Qwen
-            temperature: Sampling temperature (0.0-1.0)
-            max_tokens: Maximum tokens in response
-            
-        Returns:
-            The generated text response
-        """
-        if not self.api_key:
-            raise ValueError("Qwen API key is not set")
-        
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        payload = {
-            "model": "qwen-plus",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": False
-        }
-        
-        try:
-            response = requests.post(
-                f"{self.base_url}/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=30
-            )
-            
-            response.raise_for_status()
-            
-            result = response.json()
-            
-            if "choices" in result and len(result["choices"]) > 0:
-                return result["choices"][0].get("message", {}).get("content", "")
-            elif "output" in result:
-                return result["output"]
-            elif "text" in result:
-                return result["text"]
-            else:
-                return str(result)
-                
-        except requests.exceptions.RequestException as e:
-            print(f"Qwen API error: {e}")
-            return f"[API Error: {str(e)}]"
-        except json.JSONDecodeError as e:
-            print(f"Qwen API response parse error: {e}")
-            return f"[Response Parse Error: {str(e)}]"
+        return []
     
     def check_connection(self) -> bool:
-        """
-        Test the API connection.
-        
-        Returns:
-            True if connection is successful, False otherwise
-        """
         try:
-            test_prompt = "Say 'Qwen-Sentinel connection test successful'"
-            response = self._call_qwen(test_prompt, temperature=0.0, max_tokens=10)
+            response = self._call_qwen("Say connection test successful", temperature=0.0, max_tokens=10)
             return "successful" in response.lower()
-        except Exception as e:
-            print(f"Connection test failed: {e}")
+        except:
             return False
